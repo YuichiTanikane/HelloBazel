@@ -291,3 +291,119 @@ deps = ["//hello/vendor/github.com/google/uuid"],
 であり、 `go.mod` に書かれている `github.com/google/uuid v1.1.2` から情報が減っているような気がするし、結局 `go mod vendor` で配置した uuid を使っている気がするのでなんか不思議な気持ちもする。
 
 - キャッシュを使うことで高速化されているので、 CI サーバー（ TravisCI や GitHub Actions など）で使うには、`actions/cache` のようなものなど、キャッシュを使える状態にして使うべきなのだろう。
+
+## Docker Image も作ってみる
+
+### やってみたこと
+
+[Bazel Container Image Rules](https://github.com/bazelbuild/rules_docker)を使うと Docker Image (OCIでも良いのかしら)をビルドすることができるようだ。
+
+しかし…
+
+> Note: Some of these rules are not supported on Mac. Specifically go_image cannot be used from Bazel running on a Mac. Other rules may also fail arbitrarily on Mac due to unforeseen toolchain issues that need to be resolved in Bazel and upstream rules repos.
+
+Mac では、あんまり動かないというようなことが書いてある。
+
+でもやってみた。
+
+```starlark
+# Docker の rule を取得
+http_archive(
+    name = "io_bazel_rules_docker",
+    sha256 = "1698624e878b0607052ae6131aa216d45ebb63871ec497f26c67455b34119c80",
+    strip_prefix = "rules_docker-0.15.0",
+    urls = ["https://github.com/bazelbuild/rules_docker/releases/download/v0.15.0/rules_docker-v0.15.0.tar.gz"],
+)
+
+load(
+    "@io_bazel_rules_docker//repositories:repositories.bzl",
+    container_repositories = "repositories",
+)
+container_repositories()
+
+load(
+    "@io_bazel_rules_docker//go:image.bzl",
+    _go_image_repos = "repositories",
+)
+_go_image_repos()
+
+```
+
+WORKSPACE に go_image を追加して、
+
+```starlark
+go_image(
+    name = "hello_image",
+    embed = [":hello_lib"],
+)
+```
+
+image のビルド定義を書いてみた。
+
+```shell
+❯ bazel build --platforms=@io_bazel_rules_go//go/toolchain:linux_amd64 //hello:hello_image
+INFO: Analyzed target //hello:hello_image (0 packages loaded, 0 targets configured).
+INFO: Found 1 target...
+Target //hello:hello_image up-to-date:
+  bazel-bin/hello/hello_image-layer.tar
+INFO: Elapsed time: 0.853s, Critical Path: 0.01s
+INFO: 1 process: 1 internal.
+INFO: Build completed successfully, 1 total action
+```
+
+できる…？
+
+```shell
+❯ bazel run --platforms=@io_bazel_rules_go//go/toolchain:linux_amd64 //hello:hello_image
+INFO: Analyzed target //hello:hello_image (0 packages loaded, 0 targets configured).
+INFO: Found 1 target...
+Target //hello:hello_image up-to-date:
+  bazel-bin/hello/hello_image-layer.tar
+INFO: Elapsed time: 0.391s, Critical Path: 0.00s
+INFO: 1 process: 1 internal.
+INFO: Build completed successfully, 1 total action
+INFO: Build completed successfully, 1 total action
+Loaded image ID: sha256:5732f428a594873a125db45362c7354d60e1e6791e7f89f9ddd8ea543d20dfba
+Tagging 5732f428a594873a125db45362c7354d60e1e6791e7f89f9ddd8ea543d20dfba as bazel/hello:hello_image
+---start---
+new uuid is [2291086f-f86e-4a83-aa4d-5d6a9a8896ac]
+---end---
+```
+
+動いた…？
+
+動きました。
+
+### 調べたこと
+
+[Bazel Container Image Rules](https://github.com/bazelbuild/rules_docker)に書いてあったこと。
+
+> These rules do not require / use Docker for pulling, building, or pushing images
+
+ローカルに Docker がなくてもビルドやPullやPushができるとのこと。
+
+> unlike traditional container builds (e.g. Dockerfile), the Docker images produced by container_image are deterministic / reproducible.
+
+たしかに Dockerfile を書いていない。
+
+Dockerfile というのは書き方によっては build する環境やタイミングによって作られる image が違う可能性があるが、この `rules_docker` で container_image から作る image には再現性がある、ということのようだ。
+
+> By default these higher level rules make use of the distroless language runtimes
+
+抽象度の高い書き方（カスタムに base image を選んだりとかせずに今回のような書き方）をすると、デフォルトで、 distroless イメージが使われるとのこと。
+
+[distroless](https://github.com/GoogleContainerTools/distroless)というのは、Googleが出している、大雑把にいうと「アプリの言語ごとに、本当に最小限のものしか入っていない」イメージで、それをベースにすることで、image のサイズが小さくなったり、余計な脆弱性を持ってしまう可能性を抑えられるというもの。
+
+### 思ったこと
+
+たしかに Dockerfile をサイズ効率も良く、再現性があり、不確定要素なく記述するのはある程度の難しさがある。そのあたりの考慮を「ベストプラクティスっっぽい使い方」に載っていれば記述しなくてもできる、という雰囲気は良いなと思った。
+
+マルチステージビルドとか、そういうことももはや私は何も気にしなくて良いのだろうか…
+
+## まとめ
+
+- やってみた感想。
+  - 最初は Starlark の記述に慣れていなくて何が書かれているのかがよく分からなかったが、わかってくると、少し見えてくる。
+  - コンセプト的には好きというか、納得感のある思想だと思ったが、 Google 内での開発のような巨大なプロジェクトで本当に成立するというところまでの理解はなかなか先が長そう。
+
+- 

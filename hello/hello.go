@@ -9,7 +9,7 @@ import (
 func main() {
 	fmt.Println("---start---")
 
-	fmt.Printf("test id = [%s]\n", makeUUID())
+	fmt.Printf("new uuid is [%s]\n", makeUUID())
 
 	fmt.Println("---end---")
 }
